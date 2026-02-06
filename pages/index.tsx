@@ -28,10 +28,11 @@ type Attachment = {
   name: string;
   url: string;
   path: string;
-  contentType?: string;
-  size?: number;
-  createdAt: string;
+  mime: string;
+  size: number;
+  uploadedAt: string;
 };
+
 
 // Extendemos Entry sin tocar lib/types
 type EntryExt = Entry & {
@@ -163,15 +164,16 @@ export default function Home() {
     await uploadBytes(storageRef, file);
     const url = await getDownloadURL(storageRef);
 
-    return stripUndefined({
-      id: attId,
-      name: file.name,
-      url,
-      path,
-      contentType: file.type || undefined,
-      size: file.size || undefined,
-      createdAt: nowISO()
-    });
+   return stripUndefined({
+  id: attId,
+  name: file.name,
+  url,
+  path,
+  mime: file.type || "application/octet-stream",
+  size: file.size || 0,
+  uploadedAt: nowISO()
+});
+
   }
 
   async function addAttachmentToExisting(entry: EntryExt, file: File) {
