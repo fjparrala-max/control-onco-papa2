@@ -1,0 +1,10 @@
+html, body { padding: 0; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+* { box-sizing: border-box; }
+.container { max-width: 520px; margin: 0 auto; padding: 16px; }
+.card { border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px; background: #fff; }
+.row { display: flex; gap: 10px; }
+.btn { padding: 10px 12px; border-radius: 12px; border: 1px solid #d1d5db; background: #0b5bd3; color: white; font-weight: 600; }
+.btn2 { padding: 10px 12px; border-radius: 12px; border: 1px solid #d1d5db; background: white; color: #111827; font-weight: 600; }
+input, select, textarea { width: 100%; padding: 10px; border-radius: 12px; border: 1px solid #d1d5db; }
+h1 { margin: 0 0 10px; }
+small { color: #6b7280; }

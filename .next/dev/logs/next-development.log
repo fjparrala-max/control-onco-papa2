@@ -1,0 +1,4 @@
+[00:00:02.150] Server  LOG     ✓ Ready in 1566ms
+[00:03:14.883] Browser WARN    [2026-02-06T06:09:38.684Z]  @firebase/firestore: Firestore (12.9.0): BloomFilter error:  {"name":"BloomFilterError"}
+[00:24:49.276] Server  LOG     ✓ Compiled in 167ms
+[00:25:10.920] Server  LOG     ✓ Compiled in 253ms

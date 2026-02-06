@@ -1,0 +1,7 @@
+__turbopack_load_page_chunks__("/profesionales", [
+  "static/chunks/8ab4191efe4b8366.js",
+  "static/chunks/0b05d6ac8730afd5.js",
+  "static/chunks/02db564c9342fb86.js",
+  "static/chunks/15cbfeffde433e6a.js",
+  "static/chunks/turbopack-02440446d7f6a988.js"
+])
