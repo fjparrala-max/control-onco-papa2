@@ -175,7 +175,8 @@ export default function Home() {
       key: t,
       label: labelForType(t),
       done: count(done, t),
-      planned: count(planned, t)
+      planned: count(planned, t),
+      usedTotal: count(entries, t)
     }));
   }, [entries, types]);
 
@@ -237,18 +238,20 @@ export default function Home() {
     setShowForm(true);
   }
 
-  // ✅ NUEVO: borrar tipo SOLO si NO hay registros usando ese tipo
+  // ✅ BORRAR TIPO (incluye los base) PERO:
+  // - bloquea si hay registros usando ese tipo
+  // - evita quedar con 0 tipos
   async function deleteType(typeKey: string) {
-    if (DEFAULT_TYPES.includes(typeKey)) {
-      return alert("Este tipo base no se puede borrar.");
-    }
-
-    // 🔒 bloqueo: si existen registros con ese tipo, NO se borra
     const usedCount = entries.filter((e) => e.type === typeKey).length;
+
     if (usedCount > 0) {
       return alert(
-        `No se puede borrar "${labelForType(typeKey)}" porque ya tiene ${usedCount} registro(s) asociado(s).\n\nPrimero cambia esos registros a otro tipo (Editar → Tipo) y luego podrás borrarlo.`
+        `No se puede borrar "${labelForType(typeKey)}" porque tiene ${usedCount} registro(s) asociado(s).\n\nPrimero edita esos registros y cámbiales el "Tipo", y luego podrás borrarlo.`
       );
+    }
+
+    if (types.length <= 1) {
+      return alert("No puedes borrar el último tipo. Debe existir al menos 1 tipo.");
     }
 
     const ok = confirm(`¿Eliminar el tipo "${labelForType(typeKey)}"?\nSe eliminará del Resumen y de las listas desplegables.`);
@@ -260,7 +263,7 @@ export default function Home() {
     setTypes(nextTypes);
 
     if (filter === typeKey) setFilter("all");
-    if (type === typeKey) setType("control");
+    if (type === typeKey) setType(nextTypes[0] || "control");
   }
 
   async function uploadAttachment(entryId: string, file: File): Promise<Attachment> {
@@ -316,7 +319,6 @@ export default function Home() {
     if (!u) return alert("Debes estar logueada.");
     if (!title.trim()) return alert("Falta título (ej: PSA / Control / Quimio ciclo 2)");
 
-    // si el tipo no está en la lista, lo agregamos automáticamente
     if (!types.includes(type)) {
       const next = Array.from(new Set([...types, type]));
       await updateDoc(GLOBAL_DOC, { types: next, updatedAt: serverTimestamp() });
@@ -428,7 +430,6 @@ export default function Home() {
 
   return (
     <div className="container">
-      {/* Top bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <div style={{ fontWeight: 700 }}>Control Onco Papá</div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -443,7 +444,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Resumen + Agregar/Administrar tipos */}
       <div className="card" style={{ marginBottom: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
           <b>Resumen (Hechos / Pendientes)</b>
@@ -456,33 +456,49 @@ export default function Home() {
         </div>
 
         <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
-          {summary.map((s) => (
-            <div key={s.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-              <div>
-                {s.label}: Hechos <b>{s.done}</b> /{" "}
-                <span style={{ color: "red" }}>
-                  Pendientes <b>{s.planned}</b>
-                </span>
-              </div>
+          {summary.map((s) => {
+            const disabled = s.usedTotal > 0 || types.length <= 1;
+            const reason =
+              s.usedTotal > 0
+                ? "No se puede borrar porque tiene registros."
+                : types.length <= 1
+                ? "No puedes borrar el último tipo."
+                : "";
 
-              {showManageTypes && !DEFAULT_TYPES.includes(s.key) && (
-                <button className="btn2" onClick={() => deleteType(s.key)}>
-                  Borrar tipo
-                </button>
-              )}
-            </div>
-          ))}
+            return (
+              <div key={s.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <div>
+                  {s.label}: Hechos <b>{s.done}</b> /{" "}
+                  <span style={{ color: "red" }}>
+                    Pendientes <b>{s.planned}</b>
+                  </span>
+                </div>
+
+                {showManageTypes && (
+                  <button
+                    className="btn2"
+                    onClick={() => deleteType(s.key)}
+                    disabled={disabled}
+                    title={reason}
+                    style={disabled ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
+                  >
+                    Borrar tipo
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="btn" onClick={() => { resetForm(); setShowForm(true); }}>+ Añadir registro</button>
+          <button className="btn" onClick={openCreate}>+ Añadir registro</button>
         </div>
 
         {showManageTypes && (
           <div style={{ marginTop: 10 }}>
             <small>
-              Nota: no se pueden borrar los tipos base.  
-              Para borrar un tipo creado por ti, primero debe tener 0 registros asociados (edita los registros y cámbialos de tipo).
+              Para borrar un tipo (incluidos los base), debe tener 0 registros asociados.
+              Si está deshabilitado, pasa el mouse para ver el motivo.
             </small>
           </div>
         )}
