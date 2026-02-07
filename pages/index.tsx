@@ -27,7 +27,7 @@ function stripUndefined<T extends Record<string, any>>(obj: T): T {
 
 type EntryStatus = "planned" | "done" | "cancelled";
 
-// ✅ Adjuntos con los campos que tu proyecto exige (mime/uploadedAt)
+// Adjuntos: campos esperados por tu types (mime/uploadedAt)
 type Attachment = {
   id: string;
   name: string;
@@ -40,7 +40,7 @@ type Attachment = {
 
 type Entry = {
   id: string;
-  type: string; // ✅ permite tipos nuevos dinámicos
+  type: string; // dinámico para tipos nuevos
   title: string;
   dateTime: string; // ISO
   status: EntryStatus;
@@ -68,10 +68,7 @@ function labelForType(key: string) {
   if (key === "chemo") return "Quimioterapia";
   if (key === "exam") return "Examen";
   if (key === "med") return "Medicamento (toma)";
-  // custom: traumatologo → Traumatologo
-  return key
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (m) => m.toUpperCase());
+  return key.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
 function statusLabel(s: EntryStatus) {
@@ -81,7 +78,11 @@ function statusLabel(s: EntryStatus) {
 export default function Home() {
   const r = useRouter();
 
-  const [activeCaseId, setActiveCaseId] = useState<string>("");
+  // ✅ CLAVE: null = “aún leyendo localStorage”
+  // ""   = “no hay caso activo”
+  // id   = caso activo
+  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
+
   const [caseName, setCaseName] = useState<string>("");
   const [caseTypes, setCaseTypes] = useState<string[]>(DEFAULT_TYPES);
 
@@ -106,36 +107,41 @@ export default function Home() {
   const [notes, setNotes] = useState("");
   const [professionalId, setProfessionalId] = useState<string>("");
 
+  // ✅ Leer el caso activo desde localStorage (una vez)
   useEffect(() => {
     const id = typeof window !== "undefined" ? localStorage.getItem("activeCaseId") : null;
-    setActiveCaseId(id || "");
+    setActiveCaseId(id || ""); // "" si no existe
   }, []);
 
-  // Si no hay caso activo, ir a /casos
+  // ✅ Redirigir a /casos SOLO cuando ya cargó localStorage
   useEffect(() => {
-    if (activeCaseId === "") {
-      // solo cuando ya cargó localStorage
-      // (si está vacío, mandamos a casos)
-      r.replace("/casos");
-    }
+    if (activeCaseId === null) return; // aún cargando
+    if (activeCaseId === "") r.replace("/casos");
   }, [activeCaseId, r]);
 
-  async function refresh() {
-    if (!activeCaseId) return;
-
+  async function refresh(caseId: string) {
     // Cargar caso (nombre + tipos)
-    const cSnap = await getDoc(doc(db, "cases", activeCaseId));
+    const cSnap = await getDoc(doc(db, "cases", caseId));
     if (cSnap.exists()) {
       const c: any = cSnap.data();
       setCaseName(c.name || "");
       const types = Array.isArray(c.types) && c.types.length ? c.types : DEFAULT_TYPES;
       setCaseTypes(types);
+
+      // asegurar que el tipo actual exista
       if (!types.includes(type)) setType(types[0] || "control");
+    } else {
+      // caso no existe -> volver a casos
+      setCaseName("");
+      setCaseTypes(DEFAULT_TYPES);
+      localStorage.removeItem("activeCaseId");
+      setActiveCaseId("");
+      return;
     }
 
     // Entradas
-    const eQ = query(collection(db, "cases", activeCaseId, "entries"), orderBy("dateTime", "desc"));
-    const pQ = query(collection(db, "cases", activeCaseId, "professionals"), orderBy("name", "asc"));
+    const eQ = query(collection(db, "cases", caseId, "entries"), orderBy("dateTime", "desc"));
+    const pQ = query(collection(db, "cases", caseId, "professionals"), orderBy("name", "asc"));
     const [eSnap, pSnap] = await Promise.all([getDocs(eQ), getDocs(pQ)]);
 
     setEntries(eSnap.docs.map((d) => d.data() as Entry));
@@ -143,7 +149,9 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (activeCaseId) refresh();
+    if (activeCaseId && activeCaseId !== "") {
+      refresh(activeCaseId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCaseId]);
 
@@ -152,14 +160,12 @@ export default function Home() {
     const planned = entries.filter((e) => e.status === "planned");
     const count = (arr: Entry[], t: string) => arr.filter((e) => e.type === t).length;
 
-    const byType = caseTypes.map((t) => ({
+    return caseTypes.map((t) => ({
       key: t,
       label: labelForType(t),
       done: count(done, t),
       planned: count(planned, t)
     }));
-
-    return byType;
   }, [entries, caseTypes]);
 
   const filtered = useMemo(() => {
@@ -203,7 +209,7 @@ export default function Home() {
   }
 
   async function addType() {
-    if (!activeCaseId) return alert("Abre un caso primero");
+    if (!activeCaseId || activeCaseId === "") return alert("Abre un caso primero");
     const t = prompt("Nombre del nuevo tipo (ej: Traumatólogo, Radioterapia, etc.)");
     if (!t) return;
 
@@ -214,12 +220,10 @@ export default function Home() {
     setCaseTypes(next);
   }
 
-  async function uploadAttachment(entryId: string, file: File): Promise<Attachment> {
-    if (!activeCaseId) throw new Error("No hay caso activo");
-
+  async function uploadAttachment(caseId: string, entryId: string, file: File): Promise<Attachment> {
     const attId = crypto.randomUUID();
     const safeName = file.name.replace(/[^\w.\- ()]/g, "_");
-    const path = `cases/${activeCaseId}/entries/${entryId}/${attId}-${safeName}`;
+    const path = `cases/${caseId}/entries/${entryId}/${attId}-${safeName}`;
 
     const storageRef = ref(storage, path);
     await uploadBytes(storageRef, file);
@@ -238,25 +242,25 @@ export default function Home() {
 
   async function addAttachmentToExisting(entry: Entry, file: File) {
     try {
-      if (!activeCaseId) return alert("Necesitas un caso activo (abre uno en Casos).");
+      if (!activeCaseId || activeCaseId === "") return alert("Necesitas un caso activo (abre uno en Casos).");
       const u = auth.currentUser;
       if (!u) return alert("Debes estar logueada.");
 
       setUploadingEntryId(entry.id);
 
-      const att = await uploadAttachment(entry.id, file);
+      const att = await uploadAttachment(activeCaseId, entry.id, file);
       const current = entry.attachments || [];
 
-      const updated: Entry = {
+      const updated: Entry = stripUndefined({
         ...entry,
         attachments: [...current, att],
         updatedAt: nowISO(),
         updatedByUid: u.uid,
         updatedByEmail: u.email || undefined
-      };
+      });
 
       await setDoc(doc(db, "cases", activeCaseId, "entries", entry.id), stripUndefined(updated));
-      await refresh();
+      await refresh(activeCaseId);
     } catch (e: any) {
       console.error(e);
       alert(e?.message || "No se pudo subir el archivo");
@@ -267,7 +271,7 @@ export default function Home() {
 
   async function saveEntry() {
     if (!title.trim()) return alert("Falta título (ej: Control Urología / PSA / Quimio ciclo 2)");
-    if (!activeCaseId) return alert("Necesitas un caso activo (abre uno en Casos).");
+    if (!activeCaseId || activeCaseId === "") return alert("Necesitas un caso activo (abre uno en Casos).");
 
     const u = auth.currentUser;
     if (!u) return alert("Debes estar logueada.");
@@ -299,14 +303,12 @@ export default function Home() {
       updatedByEmail: u.email || undefined
     });
 
-    // Guardar entry
     await setDoc(doc(db, "cases", activeCaseId, "entries", entry.id), stripUndefined(entry));
 
-    // Si adjuntó archivo en el formulario, subir y actualizar
     if (newFile) {
       try {
         setUploadingEntryId(entry.id);
-        const att = await uploadAttachment(entry.id, newFile);
+        const att = await uploadAttachment(activeCaseId, entry.id, newFile);
         const updated: Entry = stripUndefined({
           ...entry,
           attachments: [...(entry.attachments || []), att],
@@ -321,12 +323,13 @@ export default function Home() {
       }
     }
 
-    await refresh();
+    await refresh(activeCaseId);
     setShowForm(false);
     resetForm();
   }
 
   async function toggleDone(e: Entry) {
+    if (!activeCaseId || activeCaseId === "") return;
     const u = auth.currentUser;
     if (!u) return alert("Debes estar logueada.");
 
@@ -339,27 +342,28 @@ export default function Home() {
     });
 
     await setDoc(doc(db, "cases", activeCaseId, "entries", updated.id), stripUndefined(updated));
-    await refresh();
+    await refresh(activeCaseId);
   }
 
   async function deleteEntry(id: string) {
+    if (!activeCaseId || activeCaseId === "") return;
     if (!confirm("¿Eliminar este registro?")) return;
     await deleteDoc(doc(db, "cases", activeCaseId, "entries", id));
-    await refresh();
+    await refresh(activeCaseId);
   }
 
   async function exportICS(entry: Entry) {
-    const prof = entry.professionalId ? professionals.find((p) => p.id === entry.professionalId) : null;
+    const prof = entry.professionalId ? professionals.find((p: any) => p.id === entry.professionalId) : null;
 
-    const r = await fetch("/api/ics", {
+    const resp = await fetch("/api/ics", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ entry, professional: prof || null })
     });
 
-    if (!r.ok) return alert("No se pudo generar el .ics");
+    if (!resp.ok) return alert("No se pudo generar el .ics");
 
-    const blob = await r.blob();
+    const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -369,6 +373,9 @@ export default function Home() {
     a.remove();
     URL.revokeObjectURL(url);
   }
+
+  // Mientras lee localStorage, no renderices nada (evita parpadeo/loop)
+  if (activeCaseId === null) return null;
 
   return (
     <div className="container">
@@ -466,9 +473,9 @@ export default function Home() {
               <small>Profesional (opcional)</small>
               <select value={professionalId} onChange={(e) => setProfessionalId(e.target.value)}>
                 <option value="">(sin profesional)</option>
-                {professionals.map((p) => (
-                  <option key={(p as any).id} value={(p as any).id}>
-                    {(p as any).name} — {(p as any).specialty}
+                {professionals.map((p: any) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} — {p.specialty}
                   </option>
                 ))}
               </select>
