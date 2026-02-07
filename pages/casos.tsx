@@ -2,39 +2,56 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { auth, db } from "../lib/firebase";
-import { addDoc, collection, getDocs, orderBy, query, serverTimestamp } from "firebase/firestore";
+import { addDoc, collection, getDocs, serverTimestamp } from "firebase/firestore";
 
 type CaseDoc = {
   id: string;
   name: string;
-  createdAt?: any;
   ownerUid: string;
-  types?: string[]; // para tipos personalizados
+  createdAt?: any;
+  types?: string[];
 };
+
+const DEFAULT_TYPES = ["control", "chemo", "exam", "med"];
 
 export default function Casos() {
   const r = useRouter();
   const [cases, setCases] = useState<CaseDoc[]>([]);
   const [name, setName] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
 
   async function loadCases() {
     const u = auth.currentUser;
     if (!u) return;
 
-    const q = query(collection(db, "cases"), orderBy("createdAt", "desc"));
-    const snap = await getDocs(q);
+    setLoading(true);
+    try {
+      const snap = await getDocs(collection(db, "cases"));
+      const list = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .filter((c) => c.ownerUid === u.uid) as CaseDoc[];
 
-    // Versión simple: filtra por ownerUid
-    const list = snap.docs
-      .map((d) => ({ id: d.id, ...(d.data() as any) }))
-      .filter((c) => c.ownerUid === u.uid) as CaseDoc[];
+      // Orden simple (si createdAt existe)
+      list.sort((a, b) => {
+        const ta = a.createdAt?.seconds ?? 0;
+        const tb = b.createdAt?.seconds ?? 0;
+        return tb - ta;
+      });
 
-    setCases(list);
+      setCases(list);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    loadCases();
+    const unsub = auth.onAuthStateChanged((u) => {
+      if (!u) return;
+      loadCases();
+    });
+    return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function createCase() {
@@ -42,14 +59,13 @@ export default function Casos() {
     if (!u) return alert("No estás logueada");
     if (!name.trim()) return alert("Pon un nombre de caso");
 
-    setLoading(true);
+    setCreating(true);
     try {
       const docRef = await addDoc(collection(db, "cases"), {
         name: name.trim(),
         ownerUid: u.uid,
         createdAt: serverTimestamp(),
-        // tipos base + tu idea de expandir:
-        types: ["control", "chemo", "exam", "med"]
+        types: DEFAULT_TYPES
       });
 
       localStorage.setItem("activeCaseId", docRef.id);
@@ -57,7 +73,7 @@ export default function Casos() {
     } catch (e: any) {
       alert(e?.message || "No se pudo crear caso");
     } finally {
-      setLoading(false);
+      setCreating(false);
     }
   }
 
@@ -74,27 +90,30 @@ export default function Casos() {
         <b>Crear caso</b>
         <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej: Papá Sergio" />
-          <button className="btn" onClick={createCase} disabled={loading}>
-            {loading ? "Creando..." : "Crear"}
+          <button className="btn" onClick={createCase} disabled={creating}>
+            {creating ? "Creando..." : "Crear"}
           </button>
         </div>
       </div>
 
       <div className="card">
         <b>Mis casos</b>
-        <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-          {cases.map((c) => (
-            <div key={c.id} className="card" style={{ margin: 0 }}>
-              <b>{c.name}</b>
-              <div style={{ marginTop: 8 }}>
-                <button className="btn2" onClick={() => openCase(c.id)}>
-                  Abrir
-                </button>
+
+        {loading ? (
+          <div style={{ marginTop: 10 }}><small>Cargando casos…</small></div>
+        ) : (
+          <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+            {cases.map((c) => (
+              <div key={c.id} className="card" style={{ margin: 0 }}>
+                <b>{c.name}</b>
+                <div style={{ marginTop: 8 }}>
+                  <button className="btn2" onClick={() => openCase(c.id)}>Abrir</button>
+                </div>
               </div>
-            </div>
-          ))}
-          {!cases.length && <small>No hay casos aún. Crea uno arriba.</small>}
-        </div>
+            ))}
+            {!cases.length && <small>No hay casos aún. Crea uno arriba.</small>}
+          </div>
+        )}
       </div>
     </div>
   );
