@@ -1,73 +1,50 @@
 import { useEffect, useState } from "react";
-import { useRouter } from "next/router";
+import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../lib/firebase";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "firebase/auth";
+import { useRouter } from "next/router";
 
-export default function LoginPage() {
-  const router = useRouter();
+export default function Login() {
+  const r = useRouter();
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUserEmail(u?.email ?? null);
-      setLoading(false);
-      if (u) router.replace("/casos");
+    const unsub = auth.onAuthStateChanged((u) => {
+      if (u) r.replace("/casos");
     });
     return () => unsub();
-  }, [router]);
+  }, [r]);
 
   async function login() {
+    setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email.trim(), pass);
+      r.replace("/casos");
     } catch (e: any) {
-      alert(e?.message || "Error al iniciar sesión");
+      alert(e?.message || "No se pudo iniciar sesión");
+    } finally {
+      setLoading(false);
     }
   }
-
-  async function register() {
-    try {
-      await createUserWithEmailAndPassword(auth, email.trim(), pass);
-    } catch (e: any) {
-      alert(e?.message || "Error al crear cuenta");
-    }
-  }
-
-  async function logout() {
-    await signOut(auth);
-  }
-
-  if (loading) return <div className="container"><div className="card">Cargando…</div></div>;
 
   return (
     <div className="container">
-      <h1>Acceso</h1>
-
-      <div className="card" style={{ marginBottom: 12 }}>
-        <b>Iniciar sesión / Crear cuenta</b>
-
-        <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+      <h1>Control Onco Papá</h1>
+      <div className="card">
+        <b>Iniciar sesión</b>
+        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
           <div>
-            <small>Correo</small>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="correo@ejemplo.com" />
+            <small>Email</small>
+            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="correo@..." />
           </div>
           <div>
-            <small>Clave</small>
-            <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="mín. 6 caracteres" />
+            <small>Contraseña</small>
+            <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} />
           </div>
-
-          <div className="row">
-            <button className="btn" onClick={login}>Entrar</button>
-            <button className="btn2" onClick={register}>Crear cuenta</button>
-          </div>
-
-          {userEmail && (
-            <button className="btn2" onClick={logout}>Cerrar sesión</button>
-          )}
-
-          <small>Tip: crea una cuenta para ti y otra para cada familiar que quieras invitar.</small>
+          <button className="btn" onClick={login} disabled={loading}>
+            {loading ? "Entrando..." : "Entrar"}
+          </button>
         </div>
       </div>
     </div>
