@@ -102,6 +102,9 @@ export default function Home() {
   const [uploadingEntryId, setUploadingEntryId] = useState<string | null>(null);
   const [newFile, setNewFile] = useState<File | null>(null);
 
+  // manage types UI
+  const [showManageTypes, setShowManageTypes] = useState(false);
+
   // form
   const [type, setType] = useState<string>("control");
   const [title, setTitle] = useState("");
@@ -147,7 +150,6 @@ export default function Home() {
   }
 
   async function refresh() {
-    // tipos
     const gSnap = await getDoc(GLOBAL_DOC);
     if (gSnap.exists()) {
       const data: any = gSnap.data();
@@ -156,7 +158,6 @@ export default function Home() {
       if (!t.includes(type)) setType(t[0] || "control");
     }
 
-    // entries + professionals
     const eQ = query(ENTRIES_COL, orderBy("dateTime", "desc"));
     const pQ = query(PROS_COL, orderBy("name", "asc"));
     const [eSnap, pSnap] = await Promise.all([getDocs(eQ), getDocs(pQ)]);
@@ -230,12 +231,36 @@ export default function Home() {
 
     await updateDoc(GLOBAL_DOC, { types: next, updatedAt: serverTimestamp() });
 
-    // ✅ UI inmediato
     setTypes(next);
-    // abrir formulario con el nuevo tipo seleccionado
     resetForm();
     setType(key);
     setShowForm(true);
+  }
+
+  // ✅ NUEVO: borrar tipo SOLO si NO hay registros usando ese tipo
+  async function deleteType(typeKey: string) {
+    if (DEFAULT_TYPES.includes(typeKey)) {
+      return alert("Este tipo base no se puede borrar.");
+    }
+
+    // 🔒 bloqueo: si existen registros con ese tipo, NO se borra
+    const usedCount = entries.filter((e) => e.type === typeKey).length;
+    if (usedCount > 0) {
+      return alert(
+        `No se puede borrar "${labelForType(typeKey)}" porque ya tiene ${usedCount} registro(s) asociado(s).\n\nPrimero cambia esos registros a otro tipo (Editar → Tipo) y luego podrás borrarlo.`
+      );
+    }
+
+    const ok = confirm(`¿Eliminar el tipo "${labelForType(typeKey)}"?\nSe eliminará del Resumen y de las listas desplegables.`);
+    if (!ok) return;
+
+    const nextTypes = types.filter((t) => t !== typeKey);
+    await updateDoc(GLOBAL_DOC, { types: nextTypes, updatedAt: serverTimestamp() });
+
+    setTypes(nextTypes);
+
+    if (filter === typeKey) setFilter("all");
+    if (type === typeKey) setType("control");
   }
 
   async function uploadAttachment(entryId: string, file: File): Promise<Attachment> {
@@ -418,27 +443,49 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Resumen + Agregar tipo */}
+      {/* Resumen + Agregar/Administrar tipos */}
       <div className="card" style={{ marginBottom: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
           <b>Resumen (Hechos / Pendientes)</b>
-          <button className="btn2" onClick={addType}>Agregar tipo</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn2" onClick={() => setShowManageTypes((v) => !v)}>
+              {showManageTypes ? "Cerrar" : "Administrar tipos"}
+            </button>
+            <button className="btn2" onClick={addType}>Agregar tipo</button>
+          </div>
         </div>
 
         <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
           {summary.map((s) => (
-            <div key={s.key}>
-              {s.label}: Hechos <b>{s.done}</b> /{" "}
-              <span style={{ color: "red" }}>
-                Pendientes <b>{s.planned}</b>
-              </span>
+            <div key={s.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div>
+                {s.label}: Hechos <b>{s.done}</b> /{" "}
+                <span style={{ color: "red" }}>
+                  Pendientes <b>{s.planned}</b>
+                </span>
+              </div>
+
+              {showManageTypes && !DEFAULT_TYPES.includes(s.key) && (
+                <button className="btn2" onClick={() => deleteType(s.key)}>
+                  Borrar tipo
+                </button>
+              )}
             </div>
           ))}
         </div>
 
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="btn" onClick={openCreate}>+ Añadir registro</button>
+          <button className="btn" onClick={() => { resetForm(); setShowForm(true); }}>+ Añadir registro</button>
         </div>
+
+        {showManageTypes && (
+          <div style={{ marginTop: 10 }}>
+            <small>
+              Nota: no se pueden borrar los tipos base.  
+              Para borrar un tipo creado por ti, primero debe tener 0 registros asociados (edita los registros y cámbialos de tipo).
+            </small>
+          </div>
+        )}
       </div>
 
       {/* Form */}
