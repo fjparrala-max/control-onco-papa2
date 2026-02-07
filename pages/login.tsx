@@ -1,4 +1,3 @@
-// pages/login.tsx
 import { useEffect, useState } from "react";
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../lib/firebase";
@@ -13,7 +12,7 @@ export default function Login() {
 
   useEffect(() => {
     const unsub = auth.onAuthStateChanged((u) => {
-      if (u) r.replace("/casos");
+      if (u) r.replace("/");
     });
     return () => unsub();
   }, [r]);
@@ -26,18 +25,18 @@ export default function Login() {
       } else {
         await createUserWithEmailAndPassword(auth, email.trim(), pass);
       }
-      r.replace("/casos");
+      r.replace("/");
     } catch (e: any) {
-      // Mensajes típicos
-      const msg = e?.code === "auth/email-already-in-use"
-        ? "Ese correo ya está registrado."
-        : e?.code === "auth/weak-password"
-        ? "Contraseña muy débil (mínimo 6 caracteres)."
-        : e?.code === "auth/invalid-email"
-        ? "Email inválido."
-        : e?.code === "auth/invalid-credential"
-        ? "Credenciales inválidas."
-        : (e?.message || "Error al autenticar");
+      const msg =
+        e?.code === "auth/email-already-in-use"
+          ? "Ese correo ya está registrado."
+          : e?.code === "auth/weak-password"
+          ? "Contraseña muy débil (mínimo 6 caracteres)."
+          : e?.code === "auth/invalid-email"
+          ? "Email inválido."
+          : e?.code === "auth/invalid-credential"
+          ? "Credenciales inválidas."
+          : e?.message || "Error al autenticar";
       alert(msg);
     } finally {
       setLoading(false);
@@ -68,7 +67,7 @@ export default function Login() {
           </div>
 
           <button className="btn" onClick={submit} disabled={loading}>
-            {loading ? "Procesando..." : (mode === "login" ? "Entrar" : "Crear cuenta")}
+            {loading ? "Procesando..." : mode === "login" ? "Entrar" : "Crear cuenta"}
           </button>
         </div>
       </div>

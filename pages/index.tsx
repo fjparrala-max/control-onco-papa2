@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { auth, db, storage } from "../lib/firebase";
-import type { Professional } from "../lib/types";
+import { signOut } from "firebase/auth";
 import {
   collection,
   deleteDoc,
@@ -10,10 +10,12 @@ import {
   getDocs,
   orderBy,
   query,
+  serverTimestamp,
   setDoc,
   updateDoc
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
+import type { Professional } from "../lib/types";
 
 function nowISO() {
   return new Date().toISOString();
@@ -27,7 +29,6 @@ function stripUndefined<T extends Record<string, any>>(obj: T): T {
 
 type EntryStatus = "planned" | "done" | "cancelled";
 
-// Adjuntos: campos esperados por tu types (mime/uploadedAt)
 type Attachment = {
   id: string;
   name: string;
@@ -40,9 +41,9 @@ type Attachment = {
 
 type Entry = {
   id: string;
-  type: string; // dinámico para tipos nuevos
+  type: string;
   title: string;
-  dateTime: string; // ISO
+  dateTime: string;
   status: EntryStatus;
 
   doseAmount?: number;
@@ -63,6 +64,11 @@ type Entry = {
 
 const DEFAULT_TYPES = ["control", "chemo", "exam", "med"];
 
+// Un solo “caso” global
+const GLOBAL_DOC = doc(db, "app", "global");
+const ENTRIES_COL = collection(db, "app", "global", "entries");
+const PROS_COL = collection(db, "app", "global", "professionals");
+
 function labelForType(key: string) {
   if (key === "control") return "Control";
   if (key === "chemo") return "Quimioterapia";
@@ -75,17 +81,17 @@ function statusLabel(s: EntryStatus) {
   return s === "planned" ? "Planificado" : s === "done" ? "Realizado" : "Cancelado";
 }
 
+function normalizeTypeKey(input: string) {
+  return input.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
 export default function Home() {
   const r = useRouter();
 
-  // ✅ CLAVE: null = “aún leyendo localStorage”
-  // ""   = “no hay caso activo”
-  // id   = caso activo
-  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
-  const [caseName, setCaseName] = useState<string>("");
-  const [caseTypes, setCaseTypes] = useState<string[]>(DEFAULT_TYPES);
-
+  const [types, setTypes] = useState<string[]>(DEFAULT_TYPES);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [professionals, setProfessionals] = useState<Professional[]>([]);
   const [filter, setFilter] = useState<string>("all");
@@ -107,66 +113,70 @@ export default function Home() {
   const [notes, setNotes] = useState("");
   const [professionalId, setProfessionalId] = useState<string>("");
 
-  // ✅ Leer el caso activo desde localStorage (una vez)
   useEffect(() => {
-    const id = typeof window !== "undefined" ? localStorage.getItem("activeCaseId") : null;
-    setActiveCaseId(id || ""); // "" si no existe
+    const unsub = auth.onAuthStateChanged(async (u) => {
+      if (!u) {
+        setUserEmail(null);
+        setReady(true);
+        return;
+      }
+      setUserEmail(u.email ?? null);
+      await ensureGlobalDoc();
+      await refresh();
+      setReady(true);
+    });
+    return () => unsub();
   }, []);
 
-  // ✅ Redirigir a /casos SOLO cuando ya cargó localStorage
-  useEffect(() => {
-    if (activeCaseId === null) return; // aún cargando
-    if (activeCaseId === "") r.replace("/casos");
-  }, [activeCaseId, r]);
-
-  async function refresh(caseId: string) {
-    // Cargar caso (nombre + tipos)
-    const cSnap = await getDoc(doc(db, "cases", caseId));
-    if (cSnap.exists()) {
-      const c: any = cSnap.data();
-      setCaseName(c.name || "");
-      const types = Array.isArray(c.types) && c.types.length ? c.types : DEFAULT_TYPES;
-      setCaseTypes(types);
-
-      // asegurar que el tipo actual exista
-      if (!types.includes(type)) setType(types[0] || "control");
-    } else {
-      // caso no existe -> volver a casos
-      setCaseName("");
-      setCaseTypes(DEFAULT_TYPES);
-      localStorage.removeItem("activeCaseId");
-      setActiveCaseId("");
+  async function ensureGlobalDoc() {
+    const snap = await getDoc(GLOBAL_DOC);
+    if (!snap.exists()) {
+      await setDoc(GLOBAL_DOC, {
+        types: DEFAULT_TYPES,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      setTypes(DEFAULT_TYPES);
+      if (!DEFAULT_TYPES.includes(type)) setType(DEFAULT_TYPES[0]);
       return;
     }
+    const data: any = snap.data();
+    const t = Array.isArray(data.types) && data.types.length ? data.types : DEFAULT_TYPES;
+    setTypes(t);
+    if (!t.includes(type)) setType(t[0] || "control");
+  }
 
-    // Entradas
-    const eQ = query(collection(db, "cases", caseId, "entries"), orderBy("dateTime", "desc"));
-    const pQ = query(collection(db, "cases", caseId, "professionals"), orderBy("name", "asc"));
+  async function refresh() {
+    // tipos
+    const gSnap = await getDoc(GLOBAL_DOC);
+    if (gSnap.exists()) {
+      const data: any = gSnap.data();
+      const t = Array.isArray(data.types) && data.types.length ? data.types : DEFAULT_TYPES;
+      setTypes(t);
+      if (!t.includes(type)) setType(t[0] || "control");
+    }
+
+    // entries + professionals
+    const eQ = query(ENTRIES_COL, orderBy("dateTime", "desc"));
+    const pQ = query(PROS_COL, orderBy("name", "asc"));
     const [eSnap, pSnap] = await Promise.all([getDocs(eQ), getDocs(pQ)]);
 
     setEntries(eSnap.docs.map((d) => d.data() as Entry));
     setProfessionals(pSnap.docs.map((d) => d.data() as Professional));
   }
 
-  useEffect(() => {
-    if (activeCaseId && activeCaseId !== "") {
-      refresh(activeCaseId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCaseId]);
-
   const summary = useMemo(() => {
     const done = entries.filter((e) => e.status === "done");
     const planned = entries.filter((e) => e.status === "planned");
     const count = (arr: Entry[], t: string) => arr.filter((e) => e.type === t).length;
 
-    return caseTypes.map((t) => ({
+    return types.map((t) => ({
       key: t,
       label: labelForType(t),
       done: count(done, t),
       planned: count(planned, t)
     }));
-  }, [entries, caseTypes]);
+  }, [entries, types]);
 
   const filtered = useMemo(() => {
     if (filter === "all") return entries;
@@ -175,7 +185,7 @@ export default function Home() {
 
   function resetForm() {
     setEditingId(null);
-    setType(caseTypes[0] || "control");
+    setType(types[0] || "control");
     setTitle("");
     setDateTime(new Date().toISOString().slice(0, 16));
     setStatus("planned");
@@ -209,21 +219,29 @@ export default function Home() {
   }
 
   async function addType() {
-    if (!activeCaseId || activeCaseId === "") return alert("Abre un caso primero");
-    const t = prompt("Nombre del nuevo tipo (ej: Traumatólogo, Radioterapia, etc.)");
-    if (!t) return;
+    const u = auth.currentUser;
+    if (!u) return alert("Debes estar logueada.");
 
-    const key = t.trim().toLowerCase().replace(/\s+/g, "_");
-    const next = Array.from(new Set([...caseTypes, key]));
+    const raw = prompt("Nuevo tipo (ej: PSA, TAC, Resonancia, Traumatólogo, Radioterapia)");
+    if (!raw) return;
 
-    await updateDoc(doc(db, "cases", activeCaseId), { types: next });
-    setCaseTypes(next);
+    const key = normalizeTypeKey(raw);
+    const next = Array.from(new Set([...types, key]));
+
+    await updateDoc(GLOBAL_DOC, { types: next, updatedAt: serverTimestamp() });
+
+    // ✅ UI inmediato
+    setTypes(next);
+    // abrir formulario con el nuevo tipo seleccionado
+    resetForm();
+    setType(key);
+    setShowForm(true);
   }
 
-  async function uploadAttachment(caseId: string, entryId: string, file: File): Promise<Attachment> {
+  async function uploadAttachment(entryId: string, file: File): Promise<Attachment> {
     const attId = crypto.randomUUID();
     const safeName = file.name.replace(/[^\w.\- ()]/g, "_");
-    const path = `cases/${caseId}/entries/${entryId}/${attId}-${safeName}`;
+    const path = `app/global/entries/${entryId}/${attId}-${safeName}`;
 
     const storageRef = ref(storage, path);
     await uploadBytes(storageRef, file);
@@ -242,13 +260,12 @@ export default function Home() {
 
   async function addAttachmentToExisting(entry: Entry, file: File) {
     try {
-      if (!activeCaseId || activeCaseId === "") return alert("Necesitas un caso activo (abre uno en Casos).");
       const u = auth.currentUser;
       if (!u) return alert("Debes estar logueada.");
 
       setUploadingEntryId(entry.id);
 
-      const att = await uploadAttachment(activeCaseId, entry.id, file);
+      const att = await uploadAttachment(entry.id, file);
       const current = entry.attachments || [];
 
       const updated: Entry = stripUndefined({
@@ -259,8 +276,8 @@ export default function Home() {
         updatedByEmail: u.email || undefined
       });
 
-      await setDoc(doc(db, "cases", activeCaseId, "entries", entry.id), stripUndefined(updated));
-      await refresh(activeCaseId);
+      await setDoc(doc(db, "app", "global", "entries", entry.id), stripUndefined(updated));
+      await refresh();
     } catch (e: any) {
       console.error(e);
       alert(e?.message || "No se pudo subir el archivo");
@@ -270,11 +287,16 @@ export default function Home() {
   }
 
   async function saveEntry() {
-    if (!title.trim()) return alert("Falta título (ej: Control Urología / PSA / Quimio ciclo 2)");
-    if (!activeCaseId || activeCaseId === "") return alert("Necesitas un caso activo (abre uno en Casos).");
-
     const u = auth.currentUser;
     if (!u) return alert("Debes estar logueada.");
+    if (!title.trim()) return alert("Falta título (ej: PSA / Control / Quimio ciclo 2)");
+
+    // si el tipo no está en la lista, lo agregamos automáticamente
+    if (!types.includes(type)) {
+      const next = Array.from(new Set([...types, type]));
+      await updateDoc(GLOBAL_DOC, { types: next, updatedAt: serverTimestamp() });
+      setTypes(next);
+    }
 
     const ts = nowISO();
     const iso = new Date(dateTime).toISOString();
@@ -303,12 +325,12 @@ export default function Home() {
       updatedByEmail: u.email || undefined
     });
 
-    await setDoc(doc(db, "cases", activeCaseId, "entries", entry.id), stripUndefined(entry));
+    await setDoc(doc(db, "app", "global", "entries", entry.id), stripUndefined(entry));
 
     if (newFile) {
       try {
         setUploadingEntryId(entry.id);
-        const att = await uploadAttachment(activeCaseId, entry.id, newFile);
+        const att = await uploadAttachment(entry.id, newFile);
         const updated: Entry = stripUndefined({
           ...entry,
           attachments: [...(entry.attachments || []), att],
@@ -316,20 +338,19 @@ export default function Home() {
           updatedByUid: u.uid,
           updatedByEmail: u.email || undefined
         });
-        await setDoc(doc(db, "cases", activeCaseId, "entries", entry.id), stripUndefined(updated));
+        await setDoc(doc(db, "app", "global", "entries", entry.id), stripUndefined(updated));
       } finally {
         setUploadingEntryId(null);
         setNewFile(null);
       }
     }
 
-    await refresh(activeCaseId);
+    await refresh();
     setShowForm(false);
     resetForm();
   }
 
   async function toggleDone(e: Entry) {
-    if (!activeCaseId || activeCaseId === "") return;
     const u = auth.currentUser;
     if (!u) return alert("Debes estar logueada.");
 
@@ -341,15 +362,14 @@ export default function Home() {
       updatedByEmail: u.email || undefined
     });
 
-    await setDoc(doc(db, "cases", activeCaseId, "entries", updated.id), stripUndefined(updated));
-    await refresh(activeCaseId);
+    await setDoc(doc(db, "app", "global", "entries", updated.id), stripUndefined(updated));
+    await refresh();
   }
 
   async function deleteEntry(id: string) {
-    if (!activeCaseId || activeCaseId === "") return;
     if (!confirm("¿Eliminar este registro?")) return;
-    await deleteDoc(doc(db, "cases", activeCaseId, "entries", id));
-    await refresh(activeCaseId);
+    await deleteDoc(doc(db, "app", "global", "entries", id));
+    await refresh();
   }
 
   async function exportICS(entry: Entry) {
@@ -374,28 +394,37 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }
 
-  // Mientras lee localStorage, no renderices nada (evita parpadeo/loop)
-  if (activeCaseId === null) return null;
+  async function logout() {
+    await signOut(auth);
+    r.replace("/login");
+  }
+
+  if (!ready) return null;
 
   return (
     <div className="container">
-      <h1>Control Onco Papá</h1>
-
-      <div className="card" style={{ marginBottom: 12 }}>
-        <b>Caso: {caseName || "(sin nombre)"}</b>
-        <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <a className="btn2" href="/casos" style={{ textDecoration: "none" }}>
-            Cambiar caso
-          </a>
-          <button className="btn2" onClick={addType}>+ Agregar tipo</button>
-        </div>
-        <div style={{ marginTop: 8 }}>
-          <small>Tipos actuales: {caseTypes.map(labelForType).join(", ")}</small>
+      {/* Top bar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontWeight: 700 }}>Control Onco Papá</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {userEmail ? (
+            <>
+              <small>{userEmail}</small>
+              <button className="btn2" onClick={logout}>Cerrar sesión</button>
+            </>
+          ) : (
+            <button className="btn2" onClick={() => r.push("/login")}>Entrar</button>
+          )}
         </div>
       </div>
 
+      {/* Resumen + Agregar tipo */}
       <div className="card" style={{ marginBottom: 12 }}>
-        <b>Resumen (Hechos / Pendientes)</b>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+          <b>Resumen (Hechos / Pendientes)</b>
+          <button className="btn2" onClick={addType}>Agregar tipo</button>
+        </div>
+
         <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
           {summary.map((s) => (
             <div key={s.key}>
@@ -412,6 +441,7 @@ export default function Home() {
         </div>
       </div>
 
+      {/* Form */}
       {showForm && (
         <div className="card" style={{ marginBottom: 12 }}>
           <b>{editingId ? "Editar registro" : "Nuevo registro"}</b>
@@ -420,17 +450,15 @@ export default function Home() {
             <div>
               <small>Tipo</small>
               <select value={type} onChange={(e) => setType(e.target.value)}>
-                {caseTypes.map((t) => (
-                  <option key={t} value={t}>
-                    {labelForType(t)}
-                  </option>
+                {types.map((t) => (
+                  <option key={t} value={t}>{labelForType(t)}</option>
                 ))}
               </select>
             </div>
 
             <div>
               <small>Título</small>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ej: Control Urología / PSA" />
+              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ej: PSA / Control Urología" />
             </div>
 
             <div className="row">
@@ -455,13 +483,13 @@ export default function Home() {
               </div>
               <div style={{ flex: 1 }}>
                 <small>Unidad (opcional)</small>
-                <input value={doseUnit} onChange={(e) => setDoseUnit(e.target.value)} placeholder="Ej: comp / mg / ml" />
+                <input value={doseUnit} onChange={(e) => setDoseUnit(e.target.value)} placeholder="Ej: mg / ml / comp" />
               </div>
             </div>
 
             <div>
               <small>Lugar (opcional)</small>
-              <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Ej: Clínica / Hospital" />
+              <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Ej: Hospital / Clínica" />
             </div>
 
             <div>
@@ -483,11 +511,7 @@ export default function Home() {
 
             <div>
               <small>Adjuntar archivo (opcional)</small>
-              <input
-                type="file"
-                accept="application/pdf,image/*"
-                onChange={(e) => setNewFile(e.target.files?.[0] || null)}
-              />
+              <input type="file" accept="application/pdf,image/*" onChange={(e) => setNewFile(e.target.files?.[0] || null)} />
               {newFile && <small>Seleccionado: <b>{newFile.name}</b></small>}
               {uploadingEntryId && <small>Subiendo archivo…</small>}
             </div>
@@ -500,18 +524,18 @@ export default function Home() {
         </div>
       )}
 
+      {/* Filtro */}
       <div className="card" style={{ marginBottom: 12 }}>
         <b>Filtrar</b>
         <select value={filter} onChange={(e) => setFilter(e.target.value)} style={{ marginTop: 8 }}>
           <option value="all">Todo</option>
-          {caseTypes.map((t) => (
-            <option key={t} value={t}>
-              {labelForType(t)}
-            </option>
+          {types.map((t) => (
+            <option key={t} value={t}>{labelForType(t)}</option>
           ))}
         </select>
       </div>
 
+      {/* Lista */}
       <div style={{ display: "grid", gap: 10 }}>
         {filtered.map((e) => (
           <div className="card" key={e.id}>

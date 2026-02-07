@@ -15,7 +15,7 @@ export default function App({ Component, pageProps }: AppProps) {
       const isPublic = PUBLIC_ROUTES.includes(r.pathname);
 
       if (!u && !isPublic) r.replace("/login");
-      if (u && r.pathname === "/login") r.replace("/casos");
+      if (u && r.pathname === "/login") r.replace("/");
 
       setReady(true);
     });
